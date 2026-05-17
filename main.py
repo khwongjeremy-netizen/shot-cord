@@ -5,23 +5,22 @@ import cv2
 from PIL import Image, ImageTk
 
 # --- 1. THEME CONFIGURATION ---
-COLOR_BG = "#1e1e1e"
-COLOR_ACCENT = "#0048FF"
-COLOR_SUCCESS = "#0048FF"
+COLOR_BG = "#0B0C10"
+COLOR_ACCENT = "#45A29E"
+COLOR_SUCCESS = "#66FCF1"
 COLOR_TEXT = "#000000"
 COLOR_TEXT_ = "#ffffff"
-COLOR_TEXT_DIM = "#888888"
-COLOR_SURFACE = "#2d2d2d"
-COLOR_NAV_BTN = "#444444"
+COLOR_TEXT_DIM = "#6B7A8F"
+COLOR_SURFACE = "#1F2833"
+COLOR_NAV_BTN = "#2C3940"
 
 COLOR_BTN_TXT_LIGHT = "#ffffff"
-COLOR_BTN_TXT_DARK = "#1e1e1e"
+COLOR_BTN_TXT_DARK = "#0B0C10"
 
-# Hover states (derived from palette; not replacements)
-COLOR_NAV_BTN_HOVER = "#525252"
-COLOR_SUCCESS_HOVER = "#2260ff"
-COLOR_SURFACE_HOVER = "#3a3a3a"
-COLOR_INSET = "#252525"
+COLOR_NAV_BTN_HOVER = "#45A29E"
+COLOR_SUCCESS_HOVER = "#8AFFF5"
+COLOR_SURFACE_HOVER = "#354656"
+COLOR_INSET = "#121921"
 
 # --- 2. TYPOGRAPHY CONFIGURATION ---
 FONT_FAMILY = "Helvetica"
@@ -31,7 +30,7 @@ FONT_BOLD = (FONT_FAMILY, 12, "bold")
 FONT_BODY = (FONT_FAMILY, 11)
 FONT_MICRO = (FONT_FAMILY, 9, "bold")
 FONT_BUTTON = (FONT_FAMILY, 12, "bold")
-FONT_METRIC = (FONT_FAMILY, 38, "bold")
+FONT_METRIC = (FONT_FAMILY, 40, "bold")
 FONT_METRIC_SUB = (FONT_FAMILY, 11, "bold")
 
 ANALYSIS_MODE = "Initial Launch"
@@ -65,6 +64,11 @@ def _bind_hover(
     widget.bind("<Leave>", lambda _e: _apply(normal_bg, normal_fg))
 
 
+def _unbind_hover(widget: tk.Widget) -> None:
+    widget.unbind("<Enter>")
+    widget.unbind("<Leave>")
+
+
 class StrikerApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -76,7 +80,6 @@ class StrikerApp:
         self.file_path_var = tk.StringVar(value="No file selected...")
         self._ref_photo: ImageTk.PhotoImage | None = None
         self.btn_launch: tk.Button | None = None
-        self._launch_hover_bound = False
 
         self.main_container = tk.Frame(self.root, bg=COLOR_BG)
         self.main_container.pack(expand=True, fill="both", padx=28, pady=24)
@@ -100,7 +103,7 @@ class StrikerApp:
         card.pack(fill="x", ipady=2)
 
         if accent:
-            tk.Frame(card, bg=COLOR_ACCENT, height=3).pack(fill="x")
+            tk.Frame(card, bg=COLOR_SUCCESS, height=3).pack(fill="x")
 
         body = tk.Frame(card, bg=COLOR_SURFACE)
         body.pack(fill="x", padx=padx, pady=pady)
@@ -118,19 +121,19 @@ class StrikerApp:
         ).pack(anchor="w", pady=(0, 12))
 
     @staticmethod
-    def _step_block(
+    def _hud_row(
         parent: tk.Widget,
         label: str,
-        body: str,
+        value: str,
         *,
         top_pad: int = 0,
     ) -> None:
-        block = tk.Frame(parent, bg=COLOR_SURFACE)
-        block.pack(fill="x", pady=(top_pad, 0))
+        row = tk.Frame(parent, bg=COLOR_SURFACE)
+        row.pack(fill="x", pady=(top_pad, 0), ipadx=2)
 
         tk.Label(
-            block,
-            text=label,
+            row,
+            text=label.upper(),
             font=FONT_MICRO,
             bg=COLOR_SURFACE,
             fg=COLOR_ACCENT,
@@ -138,15 +141,15 @@ class StrikerApp:
         ).pack(anchor="w")
 
         tk.Label(
-            block,
-            text=body,
+            row,
+            text=value,
             font=FONT_BODY,
             bg=COLOR_SURFACE,
             fg=COLOR_TEXT_,
             justify="left",
             anchor="w",
             wraplength=520,
-        ).pack(anchor="w", pady=(4, 14), ipadx=2)
+        ).pack(anchor="w", pady=(3, 12))
 
     @staticmethod
     def _flat_button(
@@ -157,12 +160,17 @@ class StrikerApp:
         bg: str,
         fg: str,
         hover_bg: str,
+        hover_fg: str | None = None,
         font=FONT_BUTTON,
         padx: int = 20,
         pady: int = 10,
         state: str = "normal",
         fill_x: bool = False,
+        bind_hover: bool = True,
     ) -> tk.Button:
+        if hover_fg is None:
+            hover_fg = fg
+
         btn = tk.Button(
             parent,
             text=text,
@@ -178,11 +186,13 @@ class StrikerApp:
             cursor="hand2",
             state=state,
             activebackground=hover_bg,
-            activeforeground=fg,
+            activeforeground=hover_fg,
+            disabledforeground=COLOR_TEXT_DIM,
         )
         if fill_x:
             btn.pack(fill="x")
-        _bind_hover(btn, bg, hover_bg, normal_fg=fg, hover_fg=fg)
+        if bind_hover and state != "disabled":
+            _bind_hover(btn, bg, hover_bg, normal_fg=fg, hover_fg=hover_fg)
         return btn
 
     # ---------------------------------------------------------------- lifecycle
@@ -190,18 +200,11 @@ class StrikerApp:
         for widget in self.main_container.winfo_children():
             widget.destroy()
         self.btn_launch = None
-        self._launch_hover_bound = False
 
     def reset_session(self) -> None:
         """Fully tear down prior analysis state before starting over."""
         cv2.destroyAllWindows()
         self.file_path_var.set("No file selected...")
-        if self.btn_launch is not None:
-            self.btn_launch.config(
-                state="disabled",
-                bg=COLOR_SURFACE,
-                fg=COLOR_TEXT_DIM,
-            )
         self.show_dashboard()
 
     def show_dashboard(self) -> None:
@@ -239,40 +242,51 @@ class StrikerApp:
 
     def _build_instructions_card(self) -> None:
         card = self._card(self.main_container, padx=22, pady=20)
-        self._card_title(card, "Workflow")
+        self._card_title(card, "Tactical HUD")
 
-        self._step_block(
+        self._hud_row(
             card,
-            "SETUP",
+            "Camera Lock",
             "Keep the camera stable on a tripod for consistent tracking.",
         )
-        self._step_block(
+        self._hud_row(
             card,
-            "STEP 01",
+            "Asset Ingest",
             "Click Browse Files to load an MP4, MOV, or AVI video asset.",
             top_pad=4,
         )
-        self._step_block(
+        self._hud_row(
             card,
-            "STEP 02",
-            "Draw a bounding box around the BALL first (Red), then the FOOT "
-            "second (Cyan). Press ENTER to lock each selection.",
+            "Target Lock",
+            "Draw a box around the BALL first (Red), then the FOOT (Cyan). "
+            "Press ENTER to lock each selection.",
             top_pad=4,
         )
-        self._step_block(
+        self._hud_row(
             card,
-            "STEP 03",
+            "Live Telemetry",
             "View real-time, 3D perspective-corrected flight telemetry live.",
             top_pad=4,
         )
 
-        tk.Frame(card, bg=COLOR_SURFACE, height=8).pack()
+        tk.Frame(card, bg=COLOR_SURFACE, height=10).pack()
 
-        image_frame = tk.Frame(card, bg=COLOR_INSET, highlightthickness=0)
-        image_frame.pack(fill="x", ipady=10, ipadx=10)
+        tk.Label(
+            card,
+            text="TARGET REFERENCE GRID",
+            font=FONT_MICRO,
+            bg=COLOR_SURFACE,
+            fg=COLOR_ACCENT,
+        ).pack(anchor="w", pady=(0, 6))
 
-        image_slot = tk.Label(image_frame, bg=COLOR_INSET, fg=COLOR_TEXT_DIM)
-        image_slot.pack(padx=12, pady=12)
+        target_frame = tk.Frame(card, bg=COLOR_ACCENT, padx=2, pady=2)
+        target_frame.pack(fill="x")
+
+        image_well = tk.Frame(target_frame, bg=COLOR_INSET)
+        image_well.pack(fill="x", padx=1, pady=1, ipadx=8, ipady=8)
+
+        image_slot = tk.Label(image_well, bg=COLOR_INSET, fg=COLOR_TEXT_DIM)
+        image_slot.pack(padx=10, pady=10)
         self._load_reference_image(image_slot)
 
     def _load_reference_image(self, target: tk.Label) -> None:
@@ -305,7 +319,7 @@ class StrikerApp:
             text="SELECTED FILE",
             font=FONT_MICRO,
             bg=COLOR_INSET,
-            fg=COLOR_TEXT_DIM,
+            fg=COLOR_ACCENT,
             anchor="w",
         ).pack(anchor="w", padx=14, pady=(10, 4))
 
@@ -330,47 +344,48 @@ class StrikerApp:
             bg=COLOR_NAV_BTN,
             fg=COLOR_TEXT_,
             hover_bg=COLOR_NAV_BTN_HOVER,
+            hover_fg=COLOR_BTN_TXT_DARK,
             padx=18,
             pady=10,
         ).pack(side="right")
 
-        self.btn_launch = tk.Button(
+        self.btn_launch = self._flat_button(
             card,
-            text="LAUNCH ANALYTICS",
-            state="disabled",
-            bg=COLOR_SURFACE,
+            "LAUNCH ANALYTICS",
+            self.start_backend,
+            bg=COLOR_INSET,
             fg=COLOR_TEXT_DIM,
+            hover_bg=COLOR_INSET,
+            hover_fg=COLOR_TEXT_DIM,
             font=(FONT_FAMILY, 13, "bold"),
-            relief="flat",
-            bd=0,
-            highlightthickness=0,
-            cursor="hand2",
+            padx=20,
             pady=18,
-            command=self.start_backend,
-            activebackground=COLOR_SUCCESS_HOVER,
-            activeforeground=COLOR_BTN_TXT_DARK,
+            state="disabled",
+            fill_x=True,
+            bind_hover=False,
         )
-        self.btn_launch.pack(fill="x", pady=(4, 0), ipady=4)
+        self.btn_launch.pack_configure(ipady=4)
 
     def _enable_launch_cta(self) -> None:
         if self.btn_launch is None:
             return
+
+        _unbind_hover(self.btn_launch)
         self.btn_launch.config(
             state="normal",
             bg=COLOR_SUCCESS,
             fg=COLOR_BTN_TXT_DARK,
             activebackground=COLOR_SUCCESS_HOVER,
             activeforeground=COLOR_BTN_TXT_DARK,
+            cursor="hand2",
         )
-        if not self._launch_hover_bound:
-            _bind_hover(
-                self.btn_launch,
-                COLOR_SUCCESS,
-                COLOR_SUCCESS_HOVER,
-                normal_fg=COLOR_BTN_TXT_DARK,
-                hover_fg=COLOR_BTN_TXT_DARK,
-            )
-            self._launch_hover_bound = True
+        _bind_hover(
+            self.btn_launch,
+            COLOR_SUCCESS,
+            COLOR_SUCCESS_HOVER,
+            normal_fg=COLOR_BTN_TXT_DARK,
+            hover_fg=COLOR_BTN_TXT_DARK,
+        )
 
     def browse_files(self) -> None:
         filename = filedialog.askopenfilename(
@@ -409,19 +424,19 @@ class StrikerApp:
             text="SESSION COMPLETE",
             font=FONT_MICRO,
             bg=COLOR_BG,
-            fg=COLOR_TEXT_DIM,
+            fg=COLOR_ACCENT,
         ).pack(pady=(48, 6))
 
         tk.Label(
             canvas,
-            text="Flight Analysis",
+            text="FLIGHT ANALYSIS",
             font=FONT_HEAD,
             bg=COLOR_BG,
-            fg=COLOR_ACCENT,
+            fg=COLOR_TEXT_,
         ).pack(pady=(0, 28))
 
         metric_card = self._card(
-            canvas, padx=28, pady=28, outer_pady=(0, 0)
+            canvas, padx=26, pady=24, outer_pady=(0, 0)
         )
 
         tk.Label(
@@ -429,29 +444,40 @@ class StrikerApp:
             text="DETECTED SHOT TYPE",
             font=FONT_METRIC_SUB,
             bg=COLOR_SURFACE,
-            fg=COLOR_TEXT_DIM,
-        ).pack(pady=(0, 16))
+            fg=COLOR_ACCENT,
+        ).pack(pady=(0, 14))
 
-        inset = tk.Frame(metric_card, bg=COLOR_INSET, highlightthickness=0)
-        inset.pack(fill="x", ipadx=24, ipady=28)
+        console_shell = tk.Frame(metric_card, bg=COLOR_SUCCESS, padx=2, pady=2)
+        console_shell.pack(fill="x")
+
+        console = tk.Frame(console_shell, bg=COLOR_INSET)
+        console.pack(fill="x", ipadx=20, ipady=26)
 
         tk.Label(
-            inset,
+            console,
+            text="CLASSIFICATION OUTPUT",
+            font=FONT_MICRO,
+            bg=COLOR_INSET,
+            fg=COLOR_TEXT_DIM,
+        ).pack(pady=(0, 10))
+
+        tk.Label(
+            console,
             text=shot_type.upper(),
             font=FONT_METRIC,
             bg=COLOR_INSET,
-            fg=COLOR_TEXT_,
+            fg=COLOR_SUCCESS,
             wraplength=480,
             justify="center",
-        ).pack(padx=20, pady=8)
+        ).pack(padx=12, pady=4)
 
         tk.Label(
             metric_card,
-            text="Perspective-corrected 3D classification",
+            text="Perspective-corrected 3D telemetry lock",
             font=FONT_BODY,
             bg=COLOR_SURFACE,
-            fg=COLOR_ACCENT,
-        ).pack(pady=(18, 0))
+            fg=COLOR_TEXT_,
+        ).pack(pady=(16, 0))
 
         action_row = tk.Frame(canvas, bg=COLOR_BG)
         action_row.pack(pady=(36, 40))
@@ -463,6 +489,7 @@ class StrikerApp:
             bg=COLOR_NAV_BTN,
             fg=COLOR_TEXT_,
             hover_bg=COLOR_NAV_BTN_HOVER,
+            hover_fg=COLOR_BTN_TXT_DARK,
             padx=36,
             pady=14,
         ).pack()
