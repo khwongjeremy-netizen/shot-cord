@@ -140,3 +140,27 @@
 #   to scale the $Z$-axis distortion. Trajectory classification boundaries are now 
 #   properly calibrated against 3D reconstructed vertical components.
 # ==============================================================================
+# ==============================================================================
+# REFACTOR LOG: UI ARCHITECTURE & VISUAL MODERNIZATION
+# ==============================================================================
+#
+# 1. ARCHITECTURE: 2-PAGE DASHBOARD FLOW
+#    - Split workspace into 2 distinct functional pages to remove layout clutter.
+#    - Page 1 (Instructions View): Houses HUD workflow details & reference map.
+#    - Page 2 (Upload Video View): Houses file input tools & execution engine.
+#    - Implemented clean forward/backward navigation between views.
+#
+# 2. CRITICAL UX FIXES: PIPELINE RE-LINK
+#    - Fixed structural bug where the engine execution button went missing.
+#    - Explicitly anchored 'LAUNCH ANALYTICS' (self.btn_launch) on Page 2.
+#    - Restored state machine: importing a video safely flips the button from
+#      'disabled' to 'normal' and binds electric-blue neon hover triggers.
+#
+# 3. AESTHETICS: COBALT CYBER-GLOW HUD
+#    - Shifted app skin to high-contrast dark blueprint (Obsidian/Tactical Slate).
+#    - Retained strict original deep blue palette (no green/cyan tones injected).
+#    - Added responsive, glowing mouse-hover animations via '_bind_hover'.
+#    - Converted instructions into sharp, microscopic cybernetic subheadings.
+#    - Overhauled final metrics card with an immersive terminal console window.
+#
+# ==============================================================================
