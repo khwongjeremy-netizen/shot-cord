@@ -1,0 +1,127 @@
+#May 01 2026 
+# --- PENDING REVISIONS & ERROR LOG (STRIKER ANALYTICS V2.0) ---
+
+# [CRITICAL] 1. BASELINE CALIBRATION (SYSTEMATIC BIAS)
+# Problem: Current dy/dx assumes the camera is perfectly level. 
+# Impact: Even a 3-degree tripod tilt causes misclassification of shot types.
+# Solution: Implement a Ground Plane/Horizon calibration step to define the "Zero-Degree" vector.
+
+# [HIGH] 2. PERSPECTIVE & DEPTH (Z-AXIS BLIND SPOT)
+# Problem: Math is currently 2D-limited. Ball moving away from camera registers as "rising" on Y-axis.
+# Impact: Long-range drives may be falsely classified as Lobs/Chips due to foreshortening.
+# Solution: Use ball-diameter pixel scaling to estimate Z-axis displacement (Depth).
+
+# [HIGH] 3. CENTROID JITTER & OUTLIER FILTERING
+# Problem: CSRT tracker "slips" or expands when ball overlaps with shadows or white goalposts.
+# Impact: Creates momentary spikes in dy/dx, leading to erratic angle calculations.
+# Solution: Implement a distance-threshold check (Centroid Outlier Filter) to reject frames with impossible velocity spikes.
+
+# [MED] 4. RELATIVE MOTION (CAMERA SHAKE)
+# Problem: Code cannot distinguish between the ball moving UP and the camera moving DOWN.
+# Impact: Handheld footage is currently unusable for accurate vector analysis.
+# Solution: Use the "Planted Foot" (static anchor) as a reference point to subtract camera global motion from ball local motion.
+
+# [LOW] 5. FPS INDEPENDENCY (HARD-CODED LOOKBACK)
+# Problem: LOOKBACK = 10 assumes 30/60 FPS. 
+# Impact: Analysis will fail or lag on 240 FPS (Slow-Mo) footage.
+# Solution: Refactor LOOKBACK as a function of cap.get(cv2.CAP_PROP_FPS).
+
+# ------------------------------------------------
+# >>> SOLUTION FOR BASELINE CALIBRATION
+# [REVISION] GROUND CALIBRATION: BIO-MECHANICAL ANCHOR METHOD
+# Logic: Use the 'Planted Foot' vector (Heel to Toe) as the true horizontal baseline.
+# Impact: Eliminates systematic error from camera tilt/uneven terrain by 
+#         referencing the athlete's anatomy rather than the video frame edge.
+# Formula: Adjusted_Angle = Raw_Ball_Angle - Planted_Foot_Angle.
+
+#May 03 2026
+
+# >>> Testcases:
+# - Long.Mov ( A recorded long ball freekick has a person running on the ball trajectory)
+# - Result( long):
+#   - On one test case the prgoram worked fine but for majority test cases the tracker would track the trajectory of the foot instead of the ball because the person walked infront of the tranjectory detection. Anotber case is that the ball's trajcectory was selected but hte plotted points followed a too verical path making the ball classified a chip/lob when in reality it was a longball. overall two error case were found with this test: Z axis innacuracy and body blocking the trajjectory of the ball
+
+
+
+# - Low.Mov ( A recorded low driven ball)
+# - Result( Low):
+#   - Trajectory mostly stayed still and therefore stayed low, tracking of the foot also proved difficult since the speed was so fast. there was one outlier case where the shot was classifified as a chip/lob ball
+
+# - lob.Mov ( A recorded chip of the ball)
+# - Result(lob): 
+#   -CANCELED
+
+# ------------------------------------------------
+# >>> SOLUTION FOR BASELINE CALIBRATION
+# [REVISION] GROUND CALIBRATION: BIO-MECHANICAL ANCHOR METHOD
+# Logic: Use the 'Planted Foot' vector (Heel to Toe) as the true horizontal baseline.
+# Impact: Eliminates systematic error from camera tilt/uneven terrain by 
+#         referencing the athlete's anatomy rather than the video frame edge.
+# Formula: Adjusted_Angle = Raw_Ball_Angle - Planted_Foot_Angle.
+#FEATURE ADDED
+
+# New Feature
+# --- ENGINEERING SOLUTIONS FOR DOCUMENTED TEST CASES ---
+
+# SOLUTION 1: OCCLUSION (BODY BLOCKING)
+# Problem: Tracker latches onto player/foot when ball is obscured.
+# Fix: Implement Velocity-Based Prediction. If the tracker jump distance > 
+#      max_velocity_threshold, hold the previous vector until ball re-emerges.
+
+# SOLUTION 2: Z-AXIS DISTORTION (LONG BALLS CLASSIFIED AS CHIPS)
+# Problem: Y-axis movement in 2D represents both 'Height' and 'Depth'.
+# Fix: Normalize 'dy' by bounding box width 'w'. As 'w' decreases, the 'dy' 
+#      contribution to 'Altitude' is mathematically penalized/reduced.
+
+# SOLUTION 3: MOTION BLUR (LOW DRIVEN OUTLIERS)
+# Problem: Fast shots exceed the CSRT tracker's search window.
+# Fix: Increase LOOKBACK to a wider temporal window and implement 
+#      Centroid-Snapping to the roundest object within the ROI.
+
+
+# --- UPDATE LOG: NEW DISCOVERED ERRORS (TEST PHASE B) ---
+
+# [ERROR] 6. TRACKER INITIALIZATION FAILURE (MISSING ANCHOR)
+# Problem: Foot/Anchor is often not present or is partially occluded in the first frame.
+# Impact: Tracker initializes on 'bad pixels' or empty space, leading to a Foot Bias of 0.
+# Result: Normalization math fails; output defaults to Raw Frame Angle.
+
+# [ERROR] 7. POINT JITTER / 'ZIG-ZAG' TRAJECTORY
+# Problem: As the ball shrinks in 'Long.Mov', the center-point precision drops.
+# Impact: Sub-pixel 'zig-zagging' in the deque creates noisy dx/dy ratios.
+# Result: High-frequency noise averages out to a 0-degree vector, misclassifying 
+#         long balls as Low Driven shots.
+
+# [ERROR] 8. TRACKER STALLING (VELOCITY LIMIT)
+# Problem: CSRT tracker search window is too small for high-velocity low-driven shots.
+# Impact: Trajectory points 'stay in place' (static) while the ball exits the frame.
+# Result: Delta values (dx/dy) approach zero, defaulting the classification to 
+#         'Analysis Incomplete' or a false 'Low Driven'.
+
+# [ERROR] 9. DEPTH-SCALING SENSITIVITY
+# Problem: Small errors in bounding-box width (w) are amplified in the depth_ratio.
+# Impact: A 2-pixel tracking slip on the ball width causes massive fluctuations 
+#         in the perspective-corrected angle.
+# Result: Unstable 'Normal Angle' readings during the flight's midpoint.
+
+# Previous clips that were classfified correclty are now clasified wrong, the previous chip shot clip(vertical view) is now classified as low driven
+
+
+# --- ENGINEERING LOG: V2.1 | PERSPECTIVE & ROBUSTNESS UPDATE ---
+# 
+# [ORIGINAL BUGS FIXED]:
+# 1. Perspective Lie: Long balls misclassified as Chips due to Z-axis depth.
+#    -> Fix: Implemented 'depth_ratio' (width scaling) to penalize dy in distant shots.
+# 2. Baseline Drift: Camera tilt/uneven terrain skewed launch angles.
+#    -> Fix: Bio-mechanical 'Foot Anchor' subtraction to normalize ground plane.
+# 3. Over-Correction: Depth math accidentally flattened pure vertical Chip shots.
+#    -> Fix: Added 'Height vs Depth' gate to bypass scaling on high-dy vectors.
+#
+# [NEW STATUS - TEST PHASE D]: 
+# Result: "Analysis Incomplete" across multiple clips.
+# Root Cause: Logic is now mathematically 'correct' but 'fragile.'
+# - Rigid LOOKBACK (10) fails on high-velocity shots that exit frame early.
+# - dx > 2 threshold is too high for distant shots with small pixel displacement.
+# - Tracker jitter (zig-zag) causing noise-floor interference in atan2 math.
+#
+# [NEXT STEPS]: Implement Dynamic Lookback and Weighted Moving Average (WMA) smoothing.

@@ -1,0 +1,73 @@
+
+
+"""
+--- STRIKER ANALYTICS: FRONT-END ARCHITECTURE ---
+
+This file (main.py) acts as the 'Controller' for the application. 
+It manages the User Experience (UX) flow through three distinct phases:
+
+1. THE WELCOME PHASE (show_welcome_screen):
+   - Initializes the application and creates a 'Main Container' frame.
+   - Displays the branding and a 'Start Tutorial' trigger.
+
+2. THE ONBOARDING PHASE (show_slideshow & next_slide):
+   - Uses a State Machine logic: it tracks the 'current_slide' index.
+   - Each time the 'Next' button is clicked, it clears the current UI 
+     and redraws the next instruction set from the self.slides list.
+   - This ensures the user understands the ROI (Region of Interest) 
+     selection process before the heavy OpenCV logic begins.
+
+3. THE CONFIGURATION PHASE (show_upload_screen & browse_files):
+   - Provides a file explorer interface to select a video source.
+   - Includes a safety 'Guard': The 'LAUNCH' button remains disabled 
+     until a valid file path is detected, preventing backend crashes.
+
+4. THE HAND-OFF (start_backend):
+   - This is the bridge between the UI and the Physics Engine.
+   - It 'withdraws' (hides) the Tkinter window to free up system resources.
+   - It calls 'run_analysis(path)', passing the selected video file 
+     into the backend function.
+   - Once the OpenCV window is closed (via 'q'), the UI 'deiconifies' 
+     (reappears), allowing for another analysis or exit.
+
+UI DESIGN NOTES:
+- Theme: Dark Mode (#1e1e1e) for a high-tech sports-analytics aesthetic.
+- Component Logic: Uses 'clear_screen()' to wipe the canvas between 
+  phases, keeping memory usage low and the code organized.
+"""
+
+"""
+--- STRIKER ANALYTICS: BACKEND PHYSICS & TRACKING ENGINE ---
+
+This module (tracker_engine.py) handles the computer vision, motion tracking, 
+and ballistic mathematics. It is designed to be called as a function 
+by the Frontend UI.
+
+1. MULTI-OBJECT TRACKING (CSRT Algorithm):
+   - The engine uses the 'CSRT' (Discriminative Correlation Filter with 
+     Channel and Spatial Reliability). 
+   - WHY CSRT? Because a soccer ball and a human foot 'deform' (change shape) 
+     rapidly during a strike. CSRT is slower than other trackers but 
+     much more accurate at handling these shape-shifts.
+
+2. IMAGE OPTIMIZATION (HSV Saturation Boost):
+   - Before tracking, the frame is converted to HSV (Hue, Saturation, Value).
+   - We artificially double the 'S' (Saturation) channel. 
+   - PURPOSE: This makes the ball stand out against the green grass, 
+     reducing the chance of the tracker 'slipping' onto a blade of grass.
+
+3. TRAJECTORY MEMORY (Deques):
+   - We use 'deques' (double-ended queues) with a max length of 45 frames.
+   - This creates a 'trailing' effect, allowing the computer to compare 
+     the ball's current position (Index 0) with its position 5 frames 
+     ago (Index 4).
+
+4. PHYSICS & BALLISTICS (Trigonometry):
+   - Launch Angle Calculation:
+     We calculate the vertical (dy) and horizontal (dx) displacement.
+     The Launch Angle is derived using: 
+     $Angle = \arctan2(dy, dx) \times (180 / \pi)$
+   - Shot Classification:
+     * < 12°: Power Shot (Low trajectory, high velocity)
+     * 12° - 38°: Floating Cross (Ideal for crossing into the box)
+     * > 38°:
