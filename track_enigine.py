@@ -1,185 +1,453 @@
-import cv2
-import numpy as np
+"""
+Striker Analytics — production telemetry engine.
+
+SoccerTelemetryEngine owns dual isolated CSRT trackers (ball / foot),
+perspective-aware launch-angle math, and alpha-blended HUD rendering.
+"""
+
+from __future__ import annotations
+
 import math
 from collections import deque
+from dataclasses import dataclass
+from enum import Enum
+from typing import Deque, Optional, Tuple
 
-def run_analysis(VIDEO_SOURCE, mode="Initial Launch"):
-    # --- 1. CONFIGURATION ---
-    STRIKE_APPROACH_FRAME = 120  
-    BALL_COLOR = (0, 0, 255)   
-    FOOT_COLOR = (255, 255, 0) 
-    TRAJECTORY_LIMIT = 60      
-    LOOKBACK = 10 
+import cv2
+import numpy as np
 
-    shot_category = "Analysis Incomplete" 
-    ball_points = deque(maxlen=TRAJECTORY_LIMIT)
-    foot_points = deque(maxlen=TRAJECTORY_LIMIT)
-    ball_widths = deque(maxlen=TRAJECTORY_LIMIT)
+Point = Tuple[int, int]
+BBox = Tuple[int, int, int, int]
 
-    video_stream = cv2.VideoCapture(VIDEO_SOURCE)
-    video_stream.set(cv2.CAP_PROP_POS_FRAMES, STRIKE_APPROACH_FRAME)
 
-    is_loaded, current_frame = video_stream.read()
-    if not is_loaded: return "Error: Video Failed"
+class TrackingState(Enum):
+    UNINITIALIZED = "uninitialized"
+    ACTIVE = "active"
+    LOST = "lost"
 
-    analytics_tracker = cv2.legacy.MultiTracker_create()
 
-    for i in range(2):
-        display_frame = current_frame.copy()
-        target = "BALL" if i == 0 else "FOOT"
-        color = (0, 0, 255) if i == 0 else (255, 255, 0)
-        cv2.putText(display_frame, f"SELECT {target} (ENTER to confirm)", (50, 50), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-        roi = cv2.selectROI("Selection Window", display_frame, False)
-        analytics_tracker.add(cv2.legacy.TrackerCSRT_create(), current_frame, roi)
+class AnalysisMode(str, Enum):
+    INITIAL_LAUNCH = "Initial Launch"
+    FULL_TRAJECTORY = "Full Trajectory"
 
-    cv2.destroyWindow("Selection Window")
 
-    print("\n--- STARTING LIVE TELEMETRY ---")
+@dataclass(frozen=True)
+class EngineConfig:
+    strike_approach_frame: int = 120
+    trajectory_limit: int = 60
+    lookback_seconds: float = 0.33
+    min_lookback_frames: int = 2
+    max_lookback_frames: int = 30
+    min_forward_dx: float = 1.0
+    depth_exponent: float = 1.5
+    height_vs_depth_ratio: float = 1.5
+    velocity_outlier_px: float = 120.0
+    math_epsilon: float = 1e-6
+    window_title: str = "Striker Analytics v2.0"
+    selection_window: str = "Selection Window"
+    ball_color: Tuple[int, int, int] = (0, 0, 255)
+    foot_color: Tuple[int, int, int] = (255, 255, 0)
+    hud_bg: Tuple[int, int, int] = (18, 18, 24)
+    hud_accent: Tuple[int, int, int] = (0, 200, 255)
+    hud_text: Tuple[int, int, int] = (245, 245, 245)
+    hud_muted: Tuple[int, int, int] = (160, 165, 175)
+    hud_alpha: float = 0.72
 
-    # --- 3. MAIN LOOP ---
-    while True:
-        is_loaded, current_frame = video_stream.read()
-        if not is_loaded: break
 
-        success, boxes = analytics_tracker.update(current_frame)
+@dataclass
+class ShotTelemetry:
+    launch_angle_deg: float = 0.0
+    depth_ratio: float = 1.0
+    foot_bias_deg: float = 0.0
+    shot_category: str = "Analysis Incomplete"
+    dx: float = 0.0
+    dy_corrected: float = 0.0
 
-        if success:
-            for i, box in enumerate(boxes):
-                x, y, w, h = [int(v) for v in box]
-                center = (x + w // 2, y + h // 2)
-                if i == 0: 
-                    ball_points.appendleft(center)
-                    ball_widths.appendleft(w)
-                    cv2.rectangle(current_frame, (x, y), (x + w, y + h), BALL_COLOR, 2)
-                else: 
-                    foot_points.appendleft(center)
-                    cv2.rectangle(current_frame, (x, y), (x + w, y + h), FOOT_COLOR, 2)
 
-        # --- 4. TRACER LOGIC ---
-        for i in range(1, len(ball_points)):
-            thickness = int(np.sqrt(TRAJECTORY_LIMIT / float(i + 1)) * 2.5)
-            cv2.line(current_frame, ball_points[i - 1], ball_points[i], BALL_COLOR, thickness)
+def screen_dy_up_positive(y_recent: float, y_older: float) -> float:
+    """Positive when the object moved upward (OpenCV y increases downward)."""
+    return y_older - y_recent
 
-        # --- 5. RE-ENGINEERED PHYSICS & TERMINAL OUTPUT ---
-        # Dynamic lookback ensures we get data even if we don't have 10 frames yet
-        current_lookback = min(len(ball_points) - 1, LOOKBACK)
-        
-        if current_lookback >= 2 and len(foot_points) > current_lookback:
-            # A. Depth & Vector Math
-            curr_w = ball_widths[0]
-            prev_w = ball_widths[current_lookback]
-            depth_ratio = prev_w / curr_w if curr_w > 0 else 1.0
 
-            dx = ball_points[0][0] - ball_points[current_lookback][0]
-            dy = ball_points[current_lookback][1] - ball_points[0][1]
+def safe_ratio(numerator: float, denominator: float, *, epsilon: float, default: float = 1.0) -> float:
+    if abs(denominator) < epsilon:
+        return default
+    return numerator / denominator
 
-            if abs(dy) > abs(dx) * 1.5:
-                corrected_dy = dy 
-            else:
-                corrected_dy = dy / (depth_ratio ** 1.5)
 
-            # B. Anchor Math
-            fdx = foot_points[0][0] - foot_points[current_lookback][0]
-            fdy = foot_points[current_lookback][1] - foot_points[0][1]
-            foot_bias = math.degrees(math.atan2(fdy, fdx)) if abs(fdx) > 1 else 0
+def classify_shot(angle_deg: float) -> str:
+    if angle_deg < 12:
+        return "Low Driven / Power"
+    if angle_deg <= 30:
+        return "Long Ball / Driven"
+    return "Chip / Lob"
 
-            final_angle = math.degrees(math.atan2(corrected_dy, dx)) - foot_bias
 
-            # C. Classification
-            if dx > 1: # Lowered threshold for sensitivity
-                if final_angle < 12: shot_category = "Low Driven / Power"
-                elif 12 <= final_angle <= 30: shot_category = "Long Ball / Driven"
-                else: shot_category = "Chip / Lob"
+class IsolatedCSRTTracker:
+    """Independent CSRT tracker with explicit state and bbox history."""
 
-                # TERMINAL OUTPUT: SHOT DATA
-                print(f"Angle: {final_angle:.2f}° | Type: {shot_category} | Z-Ratio: {depth_ratio:.2f}")
+    def __init__(
+        self,
+        label: str,
+        color: Tuple[int, int, int],
+        *,
+        trajectory_limit: int,
+        outlier_threshold: float,
+    ) -> None:
+        self.label = label
+        self.color = color
+        self._outlier_threshold = outlier_threshold
+        self._tracker: Optional[cv2.Tracker] = None
+        self.state = TrackingState.UNINITIALIZED
+        self.centroids: Deque[Point] = deque(maxlen=trajectory_limit)
+        self.widths: Deque[float] = deque(maxlen=trajectory_limit)
+        self.last_known_bbox: Optional[BBox] = None
+        self._last_centroid: Optional[Point] = None
 
-                # UI OVERLAY
-                cv2.putText(current_frame, f"Angle: {int(final_angle)} Deg", (50, 80), 1, 1.5, (255, 255, 255), 2)
-                cv2.putText(current_frame, f"Shot: {shot_category}", (50, 110), 1, 1.5, (0, 255, 255), 2)
+    @staticmethod
+    def _create_csrt() -> cv2.Tracker:
+        if hasattr(cv2, "TrackerCSRT_create"):
+            return cv2.TrackerCSRT_create()
+        return cv2.legacy.TrackerCSRT_create()
 
-        cv2.imshow("Striker Analytics v2.0", current_frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'): break
+    def init_from_roi(self, frame: np.ndarray, roi: Tuple[int, int, int, int]) -> bool:
+        x, y, w, h = (int(v) for v in roi)
+        if w <= 0 or h <= 0:
+            return False
+        try:
+            self._tracker = self._create_csrt()
+            self._tracker.init(frame, (x, y, w, h))
+        except cv2.error:
+            self._tracker = None
+            self.state = TrackingState.LOST
+            return False
+        self.state = TrackingState.ACTIVE
+        self._record_bbox((x, y, w, h))
+        return True
 
-    # --- 6. FINAL DATA DUMP ---
-    print("\n--- FINAL TRAJECTORY COORDINATES (X, Y) ---")
-    # Convert deque to a list and reverse so it prints in chronological order
-    coords = list(ball_points)[::-1]
-    for i, pt in enumerate(coords):
-        print(f"Frame {i}: {pt}")
+    def update(self, frame: np.ndarray) -> Optional[BBox]:
+        if self._tracker is None or self.state == TrackingState.UNINITIALIZED:
+            return None
 
-    video_stream.release()
-    cv2.destroyAllWindows()
-    return shot_category
+        ok, box = self._tracker.update(frame)
+        if not ok or box is None:
+            self.state = TrackingState.LOST
+            return self.last_known_bbox
 
-#Plan to update script with this logic
-'''
-# --- 5. PHYSICS & NORMALIZATION LOGIC ---
-        if len(ball_points) >= LOOKBACK + 1 and len(foot_points) >= LOOKBACK + 1:
-            # 1. GET FOOT ANCHOR (The "True Ground")
-            # We look at the foot's orientation over the lookback period
-            fdx = foot_points[0][0] - foot_points[LOOKBACK][0]
-            fdy = foot_points[LOOKBACK][1] - foot_points[0][1]
-            
-            # Note: If foot is static, fdx/fdy might be near 0. 
-            # In a pro version, you'd use the bounding box width/height for orientation.
-            foot_angle = math.degrees(math.atan2(fdy, fdx)) if abs(fdx) > 1 else 0
+        x, y, w, h = (int(v) for v in box)
+        if w <= 0 or h <= 0:
+            self.state = TrackingState.LOST
+            return self.last_known_bbox
 
-            # 2. GET RAW BALL VECTOR
-            dx = ball_points[0][0] - ball_points[LOOKBACK][0]
-            dy = ball_points[LOOKBACK][1] - ball_points[0][1]
-            raw_ball_angle = math.degrees(math.atan2(dy, dx))
-            
-            # 3. NORMALIZE (The "Anchor" Step)
-            # This 'zeros' the ball angle against the foot's baseline
-            corrected_angle = raw_ball_angle - foot_angle
+        centroid = (x + w // 2, y + h // 2)
+        if self._last_centroid is not None:
+            jump = math.hypot(
+                centroid[0] - self._last_centroid[0],
+                centroid[1] - self._last_centroid[1],
+            )
+            if jump > self._outlier_threshold:
+                self.state = TrackingState.LOST
+                return self.last_known_bbox
 
-            if dx > 2:
-                # Use corrected_angle for classification
-                if corrected_angle < 15: shot_category = "Low Driven / Power"
-                elif 15 <= corrected_angle <= 35: shot_category = "Floating Cross / Lifted"
-                else: shot_category = "Chip / Lob"
+        self.state = TrackingState.ACTIVE
+        self._record_bbox((x, y, w, h))
+        return (x, y, w, h)
 
-                # Overlay corrected stats
-                cv2.putText(current_frame, f"Foot Bias: {int(foot_angle)} Deg", (50, 80), 1, 1.2, (200, 200, 200), 2)
-                cv2.putText(current_frame, f"Normal Angle: {int(corrected_angle)} Deg", (50, 110), 1, 1.5, (255, 255, 255), 2)
-'''
-'''
-# --- RE-ENGINEERED PHYSICS: DEPTH & ANCHOR NORMALIZATION ---
-        if len(ball_points) >= LOOKBACK + 1 and len(foot_points) >= LOOKBACK + 1:
-            # 1. DEPTH ANALYSIS (The Z-Fix)
-            # Track change in ball width (w) to identify depth movement
-            # i=0 is current ball, i=LOOKBACK is 10 frames ago
-            curr_w = boxes[0][2] 
-            prev_w = last_known_w # Note: You'll need to store this from the previous loop
-            
-            # depth_ratio > 1 means ball is moving away (getting smaller)
-            depth_ratio = prev_w / curr_w if curr_w > 0 else 1.0
+    def _record_bbox(self, bbox: BBox) -> None:
+        x, y, w, h = bbox
+        centroid = (x + w // 2, y + h // 2)
+        self.last_known_bbox = bbox
+        self.centroids.appendleft(centroid)
+        self.widths.appendleft(float(w))
+        self._last_centroid = centroid
 
-            # 2. FOOT ANCHOR (The Tilted Ground Fix)
-            fdx = foot_points[0][0] - foot_points[LOOKBACK][0]
-            fdy = foot_points[LOOKBACK][1] - foot_points[0][1]
-            ground_bias = math.degrees(math.atan2(fdy, fdx)) if abs(fdx) > 1 else 0
+    @property
+    def is_active(self) -> bool:
+        return self.state == TrackingState.ACTIVE and bool(self.centroids)
 
-            # 3. VECTOR CALCULATION
-            dx = ball_points[0][0] - ball_points[LOOKBACK][0]
-            dy = ball_points[LOOKBACK][1] - ball_points[0][1]
-            
-            # --- THE "LONG BALL" CORRECTION ---
-            # If depth_ratio is high, we 'flatten' the dy because the ball 
-            # isn't rising as much as it appears to be on a 2D screen.
-            corrected_dy = dy / (depth_ratio ** 2) 
-            
-            raw_angle = math.degrees(math.atan2(corrected_dy, dx))
-            final_angle = raw_angle - ground_bias
+    @property
+    def current_width(self) -> Optional[float]:
+        if self.widths:
+            return self.widths[0]
+        if self.last_known_bbox is not None:
+            return float(self.last_known_bbox[2])
+        return None
 
-            # 4. CLASSIFICATION WITH PERSPECTIVE CORRECTION
-            if dx > 2:
-                if final_angle < 12: shot_category = "Low Driven / Power"
-                elif 12 <= final_angle <= 30: shot_category = "Long Ball / Driven Cross"
-                else: shot_category = "Chip / Lob"
-            # Overlay for Debugging
-            cv2.putText(current_frame, f"Depth Multiplier: {round(depth_ratio, 2)}x", (50, 80), 1, 1.2, (255, 100, 0), 2)
-            cv2.putText(current_frame, f"Corrected Angle: {int(final_angle)} Deg", (50, 110), 1, 1.5, (255, 255, 255), 2)
-'''
+    def width_at_lookback(self, lookback: int) -> Optional[float]:
+        if lookback < len(self.widths):
+            return self.widths[lookback]
+        if self.last_known_bbox is not None:
+            return float(self.last_known_bbox[2])
+        return None
+
+
+class SoccerTelemetryEngine:
+    """Production-grade soccer ball / foot telemetry and shot classification."""
+
+    def __init__(self, config: Optional[EngineConfig] = None) -> None:
+        self.config = config or EngineConfig()
+        cfg = self.config
+        self.ball = IsolatedCSRTTracker(
+            "BALL",
+            cfg.ball_color,
+            trajectory_limit=cfg.trajectory_limit,
+            outlier_threshold=cfg.velocity_outlier_px,
+        )
+        self.foot = IsolatedCSRTTracker(
+            "FOOT",
+            cfg.foot_color,
+            trajectory_limit=cfg.trajectory_limit,
+            outlier_threshold=cfg.velocity_outlier_px,
+        )
+        self._lookback_frames = cfg.min_lookback_frames
+        self._locked: ShotTelemetry = ShotTelemetry()
+        self._live: ShotTelemetry = ShotTelemetry()
+
+    def run(self, video_source: str, mode: str = AnalysisMode.INITIAL_LAUNCH.value) -> str:
+        capture = cv2.VideoCapture(video_source)
+        if not capture.isOpened():
+            return "Error: Video Failed"
+
+        fps = capture.get(cv2.CAP_PROP_FPS)
+        if not math.isfinite(fps) or fps <= 0:
+            fps = 30.0
+        self._lookback_frames = int(round(fps * self.config.lookback_seconds))
+        self._lookback_frames = max(
+            self.config.min_lookback_frames,
+            min(self._lookback_frames, self.config.max_lookback_frames),
+        )
+
+        capture.set(cv2.CAP_PROP_POS_FRAMES, self.config.strike_approach_frame)
+        ok, frame = capture.read()
+        if not ok or frame is None:
+            capture.release()
+            return "Error: Video Failed"
+
+        if not self._select_rois(frame):
+            capture.release()
+            cv2.destroyAllWindows()
+            return "Error: ROI Selection Cancelled"
+
+        cv2.destroyWindow(self.config.selection_window)
+        print("\n--- STARTING LIVE TELEMETRY ---")
+
+        analysis_mode = (
+            AnalysisMode.FULL_TRAJECTORY
+            if mode == AnalysisMode.FULL_TRAJECTORY.value
+            else AnalysisMode.INITIAL_LAUNCH
+        )
+
+        try:
+            self._main_loop(capture, analysis_mode)
+        finally:
+            capture.release()
+            cv2.destroyAllWindows()
+
+        self._dump_trajectory()
+        if analysis_mode == AnalysisMode.INITIAL_LAUNCH:
+            return self._locked.shot_category
+        return self._live.shot_category
+
+    def _select_rois(self, frame: np.ndarray) -> bool:
+        for tracker, label in ((self.ball, "BALL"), (self.foot, "FOOT")):
+            overlay = frame.copy()
+            cv2.putText(
+                overlay,
+                f"SELECT {label} (ENTER to confirm)",
+                (50, 50),
+                cv2.FONT_HERSHEY_DUPLEX,
+                1.0,
+                tracker.color,
+                2,
+                cv2.LINE_AA,
+            )
+            roi = cv2.selectROI(self.config.selection_window, overlay, False)
+            if roi[2] <= 0 or roi[3] <= 0:
+                return False
+            if not tracker.init_from_roi(frame, roi):
+                return False
+        return True
+
+    def _main_loop(self, capture: cv2.VideoCapture, mode: AnalysisMode) -> None:
+        while True:
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                break
+
+            ball_bbox = self.ball.update(frame)
+            foot_bbox = self.foot.update(frame)
+
+            if ball_bbox is not None and self.ball.is_active:
+                x, y, w, h = ball_bbox
+                cv2.rectangle(
+                    frame,
+                    (x, y),
+                    (x + w, y + h),
+                    self.config.ball_color,
+                    2,
+                    cv2.LINE_AA,
+                )
+
+            if foot_bbox is not None and self.foot.is_active:
+                x, y, w, h = foot_bbox
+                cv2.rectangle(
+                    frame,
+                    (x, y),
+                    (x + w, y + h),
+                    self.config.foot_color,
+                    2,
+                    cv2.LINE_AA,
+                )
+
+            self._draw_trajectory(frame)
+            telemetry = self._compute_telemetry()
+            if telemetry is not None:
+                self._live = telemetry
+                if telemetry.shot_category != "Analysis Incomplete":
+                    if (
+                        mode == AnalysisMode.FULL_TRAJECTORY
+                        or self._locked.shot_category == "Analysis Incomplete"
+                    ):
+                        self._locked = telemetry
+                        print(
+                            f"Angle: {telemetry.launch_angle_deg:.2f}° | "
+                            f"Type: {telemetry.shot_category} | "
+                            f"Z-Ratio: {telemetry.depth_ratio:.2f}"
+                        )
+
+            self._draw_hud(frame, self._live)
+            cv2.imshow(self.config.window_title, frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+
+    def _draw_trajectory(self, frame: np.ndarray) -> None:
+        pts = list(self.ball.centroids)
+        limit = self.config.trajectory_limit
+        for i in range(1, len(pts)):
+            thickness = max(1, int(math.sqrt(limit / float(i + 1)) * 2.5))
+            cv2.line(
+                frame,
+                pts[i - 1],
+                pts[i],
+                self.config.ball_color,
+                thickness,
+                cv2.LINE_AA,
+            )
+
+    def _draw_hud(self, frame: np.ndarray, t: ShotTelemetry) -> None:
+        if t.shot_category == "Analysis Incomplete":
+            return
+
+        h, w = frame.shape[:2]
+        x0, y0, pw, ph = 24, 24, 420, 130
+        overlay = frame.copy()
+        cv2.rectangle(
+            overlay,
+            (x0, y0),
+            (min(x0 + pw, w - 1), min(y0 + ph, h - 1)),
+            self.config.hud_bg,
+            -1,
+        )
+        cv2.addWeighted(
+            overlay,
+            self.config.hud_alpha,
+            frame,
+            1.0 - self.config.hud_alpha,
+            0,
+            frame,
+        )
+
+        rows = [
+            (f"Launch Angle  {t.launch_angle_deg:+.1f}°", self.config.hud_text, 0.85, 2),
+            (t.shot_category, self.config.hud_accent, 0.72, 2),
+            (
+                f"Depth {t.depth_ratio:.2f}x   Foot bias {t.foot_bias_deg:+.1f}°",
+                self.config.hud_muted,
+                0.58,
+                1,
+            ),
+        ]
+        ty = y0 + 36
+        for text, color, scale, thickness in rows:
+            cv2.putText(
+                frame,
+                text,
+                (x0 + 16, ty),
+                cv2.FONT_HERSHEY_DUPLEX,
+                scale,
+                color,
+                thickness,
+                cv2.LINE_AA,
+            )
+            ty += 34
+
+    def _effective_lookback(self) -> int:
+        if len(self.ball.centroids) < 2:
+            return 0
+        return min(len(self.ball.centroids) - 1, self._lookback_frames)
+
+    def _compute_telemetry(self) -> Optional[ShotTelemetry]:
+        lookback = self._effective_lookback()
+        eps = self.config.math_epsilon
+        if lookback < self.config.min_lookback_frames:
+            return None
+        if len(self.foot.centroids) <= lookback:
+            return None
+
+        ball_pts = self.ball.centroids
+        foot_pts = self.foot.centroids
+
+        curr_w = self.ball.current_width
+        prev_w = self.ball.width_at_lookback(lookback)
+        if curr_w is None or prev_w is None:
+            return None
+
+        depth_ratio = max(safe_ratio(prev_w, curr_w, epsilon=eps, default=1.0), eps)
+
+        dx = float(ball_pts[0][0] - ball_pts[lookback][0])
+        dy = screen_dy_up_positive(float(ball_pts[0][1]), float(ball_pts[lookback][1]))
+
+        if abs(dy) > abs(dx) * self.config.height_vs_depth_ratio:
+            corrected_dy = dy
+        else:
+            corrected_dy = dy / max(depth_ratio ** self.config.depth_exponent, eps)
+
+        fdx = float(foot_pts[0][0] - foot_pts[lookback][0])
+        fdy = screen_dy_up_positive(float(foot_pts[0][1]), float(foot_pts[lookback][1]))
+        foot_bias = (
+            math.degrees(math.atan2(fdy, fdx)) if abs(fdx) > eps else 0.0
+        )
+
+        if abs(dx) < eps and abs(corrected_dy) < eps:
+            return None
+
+        launch_angle = math.degrees(math.atan2(corrected_dy, dx)) - foot_bias
+
+        if dx <= self.config.min_forward_dx:
+            return ShotTelemetry(
+                launch_angle_deg=launch_angle,
+                depth_ratio=depth_ratio,
+                foot_bias_deg=foot_bias,
+                shot_category="Analysis Incomplete",
+                dx=dx,
+                dy_corrected=corrected_dy,
+            )
+
+        return ShotTelemetry(
+            launch_angle_deg=launch_angle,
+            depth_ratio=depth_ratio,
+            foot_bias_deg=foot_bias,
+            shot_category=classify_shot(launch_angle),
+            dx=dx,
+            dy_corrected=corrected_dy,
+        )
+
+    def _dump_trajectory(self) -> None:
+        print("\n--- FINAL TRAJECTORY COORDINATES (X, Y) ---")
+        for i, pt in enumerate(reversed(self.ball.centroids)):
+            print(f"Frame {i}: {pt}")
+
+
+def run_analysis(video_source: str, mode: str = "Initial Launch") -> str:
+    """Backward-compatible entry point for main.py."""
+    return SoccerTelemetryEngine().run(video_source, mode=mode)
