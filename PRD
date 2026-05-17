@@ -1,0 +1,146 @@
+# PRODUCT REQUIREMENT DOCUMENT (PRD)
+
+## Project Title: Soccer Telemetry Engine v3.0 (Production Redesign)
+
+**Document Version:** 3.0.0
+
+**Target Architecture:** Object-Oriented Python (OpenCV / NumPy)
+
+**Classification:** Internal Developer Specification
+
+---
+
+## 1. Executive Summary & Context
+
+### 1.1 Objective
+
+The Soccer Telemetry Engine is a high-performance computer vision tool designed to analyze soccer strike kinematics, tracking the flight trajectory of a ball and the dynamic positioning of a striker's foot. The engine translates raw 2D pixel coordinates into a perspective-corrected 3D flight trajectory, calculating launching angles, shot types, and telemetry metrics.
+
+### 1.2 Version 3.0 Regression Root-Cause Analysis
+
+Following the integration of perspective-correction logic, a major functional regression was observed during initial testing:
+
+* **The Symptom:** "Low Driven / Power Shots" were systematically misclassified as "Long Balls", and vice versa.
+* **The Root Cause:** OpenCV coordinates map the vertical Y-axis with 0 at the absolute top of the frame, increasing downwards. A rising soccer ball moves toward 0, causing a decreasing raw Y value. When the trajectory vector math was rewritten to invert this behavior ($dy_{\text{screen}} = y_{\text{past}} - y_{\text{current}}$), it was implemented without structural guards. This caused signed value errors, negative angle yields, and mathematical domain errors when tracking frames momentarily degraded.
+
+This PRD establishes the technical blueprint to structurally eliminate these errors using absolute mathematical defenses, decoupled state tracking, and an object-oriented Python pipeline.
+
+---
+
+## 2. System Architecture & Data Flow
+
+The program must process an incoming video stream frame-by-frame using a deterministic state-machine architecture.
+
+```
++--------------------+      +-------------------------+      +-------------------------+
+| Video Frame Stream | ---> |  Decoupled CV Trackers  | ---> |   Temporal FIFO Queues  |
++--------------------+      | (Independent CSRT Core) |      | (Maxlen=60 Ball / Foot) |
+                            +-------------------------+      +-------------------------+
+                                                                          |
++--------------------+      +-------------------------+                   |
+| UI Display Overlay | <--- | Tactical Classification | <-----------------+
+| & Final Data Dump  |      |   & Lens De-rotation    |
++--------------------+      +-------------------------+
+
+```
+
+### 2.1 State Management Components
+
+* **Asset Queues:** Dual historical tracking registers implemented via `collections.deque(maxlen=60)`.
+* `ball_points`: Tracks coordinate tuples `(x, y)` of the ball center.
+* `foot_points`: Tracks coordinate tuples `(x, y)` of the foot center.
+* `ball_widths`: Tracks structural tracking box widths `(w)` to evaluate real-time Z-depth.
+
+
+* **Anchor Cache Engine:** Upon user initialization at `STRIKE_APPROACH_FRAME`, the system must cache the very first valid ball width value as a immutable baseline reference variable: `w_strike`.
+
+---
+
+## 3. Detailed Functional Requirements
+
+### 3.1 Decoupled Object Tracking Pipeline
+
+The software must completely deprecate the unstable `cv2.legacy.MultiTracker_create()` API.
+
+* **Requirement 3.1.1 - Tracker Isolation:** The system must instantiate two entirely separate, isolated tracking engines:
+```python
+self.ball_tracker = cv2.TrackerCSRT_create()
+self.foot_tracker = cv2.TrackerCSRT_create()
+
+```
+
+
+* **Requirement 3.1.2 - Spatial Crossover Fault Protection:** During a strike event, the ball and foot bounding boxes heavily overlap. Using isolated trackers prevents the tracker arrays from swapping object IDs when their bounding boxes intersect.
+* **Requirement 3.1.3 - Graceful State Degradation:** If either tracking instance returns a frame status of `success == False`, the execution loop must **not** crash. It must skip mathematical vector calculations for that frame, preserve historical queues, and pass a state flag to the UI layer to render a `"TRACKING LOST / RE-ACQUIRING"` telemetry warning.
+
+### 3.2 3D Perspective Recovery & Vector Math Engine
+
+To eliminate 2D lens compression artifacts (where a ball traveling away from the lens appears to flatten vertically), the math engine must process spatial matrices explicitly.
+
+* **Requirement 3.2.1 - Corrected Screen Space Delta:** Resolve the inverted screen coordinate system. The vertical travel displacement ($dy_{\text{screen}}$) must treat upward travel as a positive integer:
+
+$$dy_{\text{screen}} = y_{\text{past}} - y_{\text{current}}$$
+
+
+* **Requirement 3.2.2 - Z-Axis Scale Extraction:** Compute real-time depth scaling by evaluating tracking degradation against the anchor cache:
+
+$$\text{scale\_factor} = \frac{w_{\text{strike}}}{\max(1, w_{\text{current}})}$$
+
+
+
+*A shrinking ball yields a scale factor $> 1.0$, signaling movement along the deep Z-axis.*
+* **Requirement 3.2.3 - Non-Linear Vertical Expansion:** Reconstruct the true 3D vertical displacement vector to counteract lens perspective compression:
+
+$$dy_{\text{corrected}} = dy_{\text{screen}} \times (\text{scale\_factor})^{1.5}$$
+
+
+
+### 3.3 Horizon Baseline Alignment (Camera Tilt Fix)
+
+To prevent handheld or non-level tripod configurations from skewing the real-world flight path angles, the system must apply a localization transform.
+
+* **Requirement 3.3.1 - Foot Vector Bias Extraction:** Analyze the movement of the kicker’s foot over the designated `LOOKBACK` window to establish a local dynamic horizon:
+
+$$\theta_{\text{ground}} = \arctan2(fdy, fdx)$$
+
+
+* **Requirement 3.3.2 - Final Angle Normalization:** Calculate the true relative launch trajectory by decoupling the ball vector from the ground bias:
+
+$$\theta_{\text{final}} = \arctan2(dy_{\text{corrected}}, dx) - \theta_{\text{ground}}$$
+
+
+
+*All calculations must process via standard Python `math.degrees()` conversions.*
+
+---
+
+## 4. Analytical Classification Parameters
+
+Once $\theta_{\text{final}}$ is safely calculated, the engine must evaluate and assign tactical shot signatures according to the following explicit geometric boundaries:
+
+| Calculated Launch Angle Range ($\theta_{\text{final}}$) | Tactical Signature Designation |
+| --- | --- |
+| $\theta_{\text{final}} < 12.0^\circ$ | Low Driven / Power Shot |
+| $12.0^\circ \le \theta_{\text{final}} \le 30.0^\circ$ | Long Ball / Driven Cross |
+| $\theta_{\text{final}} > 30.0^\circ$ | Chip / Lob / Floating Cross |
+
+---
+
+## 5. Non-Functional & Defensive Design Specifications
+
+### 5.1 Zero-Division Mitigation (ZDM)
+
+* The program must wrap all numeric denominators in a protective maximum evaluation wrapper: `max(1, denominator)`. No structural calculation step may evaluate an unbound or zero-pixel layout dimension.
+
+### 5.2 Trigonometric Domain Safety
+
+* To prevent undefined vertical slope anomalies ($dx = 0$), all angular extractions must strictly route through `math.atan2(y, x)` rather than standard `math.atan(y/x)`.
+
+### 5.3 Resource Management & Terminal Output
+
+* **Graceful Exit Lifecycle:** The program must execute within a standard Python `try...finally` control block. If a user interrupts execution via the `'q'` hotkey, the system must cleanly close visual display panels via `cv2.destroyAllWindows()` and explicitly free up hardware video channels using `video_stream.release()`.
+* **Chronological Coordinates Dump:** Upon completion of a video file read sequence, the terminal must print a reversed chronological coordinate dump showing explicit frame positions for post-game statistical evaluation.
+
+```
+
+```

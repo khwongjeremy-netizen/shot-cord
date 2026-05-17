@@ -125,3 +125,18 @@
 # - Tracker jitter (zig-zag) causing noise-floor interference in atan2 math.
 #
 # [NEXT STEPS]: Implement Dynamic Lookback and Weighted Moving Average (WMA) smoothing.
+
+# ==============================================================================
+# UPDATE LOG: May 16, 2026
+# ==============================================================================
+# - BUG FIX: Fixed a crucial coordinate inversion error in the "Initial Launch" physics logic.
+# - OBSERVATION: recorded initial logic errors of the program
+#   "Low Driven" shots were misclassified as "Long Balls" and vice versa due to 
+#   the OpenCV screen-space coordinates y-axis increasing downwards.
+# - CORRECTION: Re-engineered the vector math ($dy = y_{past} - y_{current}$) to properly 
+#   register an ascending trajectory as a positive value.
+# - RESULT: Added a dynamic 3D depth normalization factor ($\text{scale\_factor} = w_{strike} / w_{current}$) 
+#  In Trial 1, a 2D vertical screen-space calculation error caused inverse logic: 
+#   to scale the $Z$-axis distortion. Trajectory classification boundaries are now 
+#   properly calibrated against 3D reconstructed vertical components.
+# ==============================================================================
