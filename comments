@@ -140,3 +140,22 @@
 #   to scale the $Z$-axis distortion. Trajectory classification boundaries are now 
 #   properly calibrated against 3D reconstructed vertical components.
 # ==============================================================================
+# ==============================================================================
+# BATCH TESTING LOG: May 17, 2026
+# ==============================================================================
+# - METRICS DETAILED:
+#
+#   1. Long Ball Video Suite ("long ball vid")
+#      - Total Trials: 5
+#      - Success / Failure: 1 True / 4 False
+#      - Accuracy Rate: 20.0%
+#      - Evaluation: Critical underperformance. The trajectory or perspective 
+#        scaling logic is still suppressing long-range arcs, artificially 
+#        flattening them down into the lower shot categories.
+#
+#   2. Low Driven Video Suite ("low ball vid")
+#      - Total Trials: 5
+#      - Success / Failure: 4 True / 1 False
+#      - Accuracy Rate: 80.0%
+#      - Evaluation: Strong stability. The model is highly competent at 
+#        detecting and confirming low, linear trajectories.
