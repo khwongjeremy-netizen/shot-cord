@@ -23,15 +23,15 @@ FONT_METRIC = (FONT_FAMILY, 26, "bold")
 
 # --- 3. BACKEND CONNECTION ---
 try:
-    from track_enigine import run_analysis
+    from track_engine import run_analysis
 except ImportError:
-    print("Error: Could not find track_enigine.py.")
+    print("Error: Could not find track_engine.py.")
 
 class StrikerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Striker Analytics v1.0")
-        self.root.geometry("640x580")
+        self.root.geometry("640x640")
         self.root.configure(bg=COLOR_BG)
         self.root.resizable(False, False)
 
@@ -96,7 +96,7 @@ class StrikerApp:
         self.update_slide_image()
 
         continue_btn = tk.Button(layout, text="CONTINUE", font=FONT_BUTTON,
-                                 bg=COLOR_SUCCESS, fg=COLOR_TEXT,
+                                 bg=COLOR_SUCCESS, fg=COLOR_ACCENT,
                                  relief="flat", padx=24, pady=12,
                                  cursor="hand2", command=self.show_upload_screen)
         continue_btn.pack(pady=(0, 0))
