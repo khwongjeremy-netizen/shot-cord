@@ -91,7 +91,7 @@ class StrikerApp:
         reference_card.pack(fill="both", expand=True, pady=(0, 18))
 
         self.image_label = tk.Label(reference_card, bg=COLOR_INSET,
-                                    fg=COLOR_TEXT_DIM, width=62, height=14)
+                                    fg=COLOR_TEXT_DIM, width=64, height=48)
         self.image_label.pack(expand=True, fill="both", padx=12, pady=12)
         self.update_slide_image()
 
@@ -105,7 +105,7 @@ class StrikerApp:
     def update_slide_image(self):
         try:
             img = Image.open("freekick_ref.png")
-            img.thumbnail((520, 0), Image.Resampling.LANCZOS)
+            img.thumbnail((520, 260), Image.Resampling.LANCZOS)
             self.photo = ImageTk.PhotoImage(img)
             self.image_label.config(image=self.photo, text="")
         except Exception:
