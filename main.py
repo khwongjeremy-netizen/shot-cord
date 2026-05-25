@@ -105,7 +105,7 @@ class StrikerApp:
     def update_slide_image(self):
         try:
             img = Image.open("freekick_ref.png")
-            img.thumbnail((520, 520), Image.Resampling.LANCZOS)
+            img.thumbnail((520, 0), Image.Resampling.LANCZOS)
             self.photo = ImageTk.PhotoImage(img)
             self.image_label.config(image=self.photo, text="")
         except Exception:
