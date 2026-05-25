@@ -91,7 +91,7 @@ class StrikerApp:
         reference_card.pack(fill="both", expand=True, pady=(0, 18))
 
         self.image_label = tk.Label(reference_card, bg=COLOR_INSET,
-                                    fg=COLOR_TEXT_DIM, width=64, height=100)
+                                    fg=COLOR_TEXT_DIM, width=64, height=128)
         self.image_label.pack(expand=True, fill="both", padx=12, pady=12)
         self.update_slide_image()
 
