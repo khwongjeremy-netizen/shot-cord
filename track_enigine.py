@@ -393,6 +393,11 @@ class SoccerTelemetryEngine:
                             f"{telemetry.shot_category} | "
                             f"Z-Mult: {telemetry.z_depth_multiplier:.2f}x"
                         )
+                
+                # Draw geometric triangle overlay
+                lookback = self._effective_lookback()
+                if self.ball_tracker.is_tracking and lookback >= self.config.min_lookback_frames:
+                    self._draw_geometric_triangle(frame, lookback, telemetry)
 
             self._draw_telemetry_hud(frame, self._live)
             cv2.imshow(self.config.window_title, frame)
@@ -400,6 +405,55 @@ class SoccerTelemetryEngine:
                 break
 
     # -- Rendering ----------------------------------------------------------
+
+    def _draw_geometric_triangle(self, frame: np.ndarray, lookback: int, t: ShotTelemetry) -> None:
+        """
+        Renders the right-triangle overlay showing the trigonometric geometry
+        used for trajectory angle computation via math.atan2.
+        
+        Vertices:
+        - A (Base Point): ball_pts[lookback] — historical ball position
+        - B (Tip Point): ball_pts[0] — current ball position
+        - C (Right-Angle Point): (ball_pts[0][0], ball_pts[lookback][1])
+        
+        Lines drawn:
+        - Base (dx, Adjacent): Horizontal from A to C
+        - Height (dy, Opposite): Vertical from C to B
+        - Hypotenuse: Diagonal from A to B
+        """
+        ball_pts = list(self.ball_tracker.centroids)
+        
+        # Validate lookback bounds
+        if lookback < 0 or lookback >= len(ball_pts):
+            return
+        
+        # Extract vertices
+        point_a = ball_pts[lookback]  # Base: historical position
+        point_b = ball_pts[0]          # Tip: current position
+        point_c = (point_b[0], point_a[1])  # Right-angle: (current_x, historical_y)
+        
+        # Color scheme: base=subtle, height=high-contrast, hypotenuse=primary
+        color_base = self.config.hud_muted      # Subtle layout color
+        color_height = self.config.hud_accent   # High-contrast operational color
+        color_hyp = self.config.ball_color      # Primary tracking color
+        
+        thickness_minor = 1
+        thickness_major = 2
+        
+        # 1. Draw Base Line (dx, Horizontal) — from A to C
+        cv2.line(frame, point_a, point_c, color_base, thickness_minor, cv2.LINE_AA)
+        
+        # 2. Draw Height Line (dy, Vertical) — from C to B
+        cv2.line(frame, point_c, point_b, color_height, thickness_major, cv2.LINE_AA)
+        
+        # 3. Draw Hypotenuse Line — from A to B
+        cv2.line(frame, point_a, point_b, color_hyp, thickness_major, cv2.LINE_AA)
+        
+        # Draw vertex markers (small circles)
+        radius = 5
+        cv2.circle(frame, point_a, radius, color_base, -1, cv2.LINE_AA)        # A
+        cv2.circle(frame, point_b, radius, color_hyp, -1, cv2.LINE_AA)         # B
+        cv2.circle(frame, point_c, radius, color_height, -1, cv2.LINE_AA)      # C
 
     def _draw_fading_trajectory(self, frame: np.ndarray) -> None:
         """Alpha-blended trail; newest segment brightest, oldest fades out."""
@@ -437,7 +491,7 @@ class SoccerTelemetryEngine:
 
     def _draw_telemetry_hud(self, frame: np.ndarray, t: ShotTelemetry) -> None:
         h, w_img = frame.shape[:2]
-        x0, y0, pw, ph = 20, 20, 480, 148
+        x0, y0, pw, ph = 20, 20, 480, 184
 
         overlay = frame.copy()
         cv2.rectangle(overlay, (x0, y0), (min(x0 + pw, w_img - 1), min(y0 + ph, h - 1)), self.config.hud_bg, -1)
@@ -454,6 +508,8 @@ class SoccerTelemetryEngine:
         lines = [
             (f"3D Corrected Angle: {t.angle_3d_deg:+.1f}°", self.config.hud_text, 0.82, 2),
             (f"Calculated Shot Category: {t.shot_category}", self.config.hud_accent, 0.64, 2),
+            (f"Base (dx): {t.dx:.1f} px", self.config.hud_muted, 0.58, 1),
+            (f"Height (dy_corr): {t.dy_corrected:.1f} px", self.config.hud_muted, 0.58, 1),
             (f"Z-Axis Depth Multiplier: {t.z_depth_multiplier:.2f}x", self.config.hud_muted, 0.58, 1),
         ]
         ty = y0 + 38
