@@ -139,12 +139,6 @@ class PerspectiveCorrectionEngine:
         factor = max(scale ** self._depth_exponent, self._epsilon)
         return dy_screen * factor
 
-
-# ---------------------------------------------------------------------------
-# Decoupled CSRT tracker (PRD §3)
-# ---------------------------------------------------------------------------
-
-
 class CSRTObjectTracker:
     """Thread-safe wrapper around a single CSRT instance."""
 
