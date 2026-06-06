@@ -19,7 +19,7 @@ class TrackState(Enum):
     act = "ACTIVE"
     lost = "LOST"
 
-@dataclass (froxen=True):
+@dataclass (froxen=True)
 class Constants:
     strike_approach_frame: int = 120
     trajectory_limit: int = 60
