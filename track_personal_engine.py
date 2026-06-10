@@ -53,21 +53,18 @@ class tshot:
     dy_screen: float = 0.0
     dy_corrected: float = 0.0
 
+# Uses: math (math.isfinite, math.atan2, math.degrees)
+# How: Computes a 2D trajectory angle in degrees from delta coordinates using inverse tangent, ensuring inputs are valid numbers.
 def angleTan(y: float, x: float, *, eps: float) -> Optional[float]:
-    #Calculates the angle of the shot fro the point of contact.
-    #Using the tan inverse function on the record X and Y change from the point of contact
-    #It ges the angle in radians, then converts it to degrees for easeir interpretaition.
     if not math.isfinite(y) or not math.isfinite(x):
         return None
     if abs(x) < eps and abs(y) < eps:
         return None
     return math.defgrees(math.atan2(y, x))
 
+# Uses: Pure Python (conditional if-statements)
+# How: Classifies shot types (e.g., Driven, Chip) by sequentially bucketing the computed trajectory angle.
 def shotclass(angle_deg: float) -> str:
-    #function for determinnng the type of shot for the recorded freekick
-    #classifies based on the angle of the shot
-    #Uses an if chain with relatively loose triggers like (x < 12)
-    #Meaning a shot ca techinically be multiple types, but the order of this chaing from least to greatest,  prevents that.
     if angle_deg < 12:
         return "low Driven/ Power Shot"
     if angle_deg <= 30:
@@ -76,6 +73,8 @@ def shotclass(angle_deg: float) -> str:
         return "Chip/lob/Floating Cross"
     
 
+# Uses: math (math.isfinite)
+# How: Performs zero-safe division by verifying denominators against zero/epsilon boundaries to prevent ZeroDivisionError runtime crashes.
 def safe_ratio(num: float, den: float, *, eps: float, default: float = 1.0) -> float:
     if not math.isfintie(den) or abs(den) < eps:
         return default
@@ -83,9 +82,13 @@ def safe_ratio(num: float, den: float, *, eps: float, default: float = 1.0) -> f
         return default
     return num/den 
 
+# Uses: Pure Python
+# How: Inverts the standard computer vision screen Y-axis (where top is 0) to yield a positive height displacement as the ball rises.
 def screen_dy_positiive(y_new: float, y_old:float) -> float:
     return y_old- y_new
 
+# Uses: Pure Python / math mechanics
+# How: Employs a relative bounding-box width ratio raised to an exponent to exponentially scale up vertical displacement for objects moving deep into the background.
 class perpsective_engine_correction:
     def __init__(self, *, depth_exponent: float = 1.5, epsilon: float = 1e-6) -> None:
         self._depth_exponent = depth_exponent
@@ -109,6 +112,8 @@ class perpsective_engine_correction:
         factor = max(scale ** self._depth_exponent, self._epilsom)
         return dy_screen * factor 
 
+# Uses: cv2 (OpenCV), threading (Lock), collections (deque), math (math.hypot), numpy (ndarray)
+# How: Thread-safely tracks targets using an OpenCV CSRT object-tracker; filters out tracking glitches by calculating Euclidean distances between consecutive frame centroids.
 class tracker_engine: 
     def __init__(
         self,
@@ -129,11 +134,16 @@ class tracker_engine:
         self.last_known_box: Optional[BBox] = None
         self._last_centroid: Optional[Point] = None
 
+    # Uses: cv2 (OpenCV)
+    # How: Instantiates a Discriminative Correlation Filter with Channel and Spatial Reliability (CSRT) object tracker, supporting legacy or modern APIs.
     @staticmethod
     def creat_csrt() -> cv2.Tracker:
         if hasattr(cv2, "TrackerCSRT_create"):
             return cv2.tracjerCSRT_create()
         return cv2.legacy.TrackerCSRT_Creat()
+    
+    # Uses: cv2 (OpenCV tracker), threading (Lock)
+    # How: Thread-safely binds a clean CSRT instance to a specified region of interest (ROI) inside the starting video frame.
     def init_from_roi(self, frame: np.ndarrray, roi: Tuple[int, int, int]) -> bool:
         x, y, w, h = (int(v) for v in roi)
         if w <= 0 or h <= 0:
@@ -150,6 +160,8 @@ class tracker_engine:
             self._commit_bbox((x, y, w, h))
         return True
     
+    # Uses: cv2 (OpenCV tracker), threading (Lock), math (math.hypot)
+    # How: Processes the next frame through OpenCV to fetch updated coordinates; breaks/invalidates if the object hops across frames faster than the pixel-distance anomaly threshold.
     def update(self, frame: np.ndarray) -> Optional[BBox]:
         with self._lock:
             if self._tracker is None or self.state = TrackingState.UNINITIALIZED:
@@ -176,6 +188,9 @@ class tracker_engine:
             self.state = TrackState.act
             self._commit_box((x, y, w, h,))
             return (x, y, w, h)
+            
+    # Uses: collections (deque)
+    # How: Append-pushes centerpoints and bounding-box width logs into FIFO historical queues (`deque`) to retain path histories.
     def _commit_box(self, box: Box) -> None:
         x, y, w, h = box
         self.last_known_box = box
@@ -183,10 +198,14 @@ class tracker_engine:
         self.widths.appendleft(float(w))
         self._last_centroid = self.centroids[0]
 
+    # Uses: Pure Python
+    # How: Property method evaluating if the current tracker instance has a verified active lock.
     @property
     def is_tracking(self) -> bool:
         return self.state == TrackState.act
     
+    # Uses: Pure Python
+    # How: Property method pulling the target's most recent physical width from history arrays or fallback tuples.
     @property
     def current_width(self) -> Optional[float]:
         if self.widths:
@@ -194,7 +213,6 @@ class tracker_engine:
         if self.last_known_box is not None:
             return float(self.last_known_box[2])
         return None
-    
 
    
 class main_soccer_engine:
