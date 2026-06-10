@@ -216,5 +216,28 @@ class tracker_engine:
 
    
 class main_soccer_engine:
-    pass
+    def __init_(self, config: Optional[EngineConfig] = None) -> None:
+        self.config = config or EngineConfig()
+        cfg = self.config
+        self.ball_tracker = CSRTObjectTracker(
+            "BALL", 
+            cfg.ball_color, 
+            trajectory_limit=cfg.trajectory_limit,
+            outlier_threshold=cfg.velocity_outlier_px,
+        )
+        self.foot_tracker = CSRTObejctTracker(
+            "FOOT",
+            cfg.foot_color,
+            trajectory_limit=cfg.trajectory_limit,
+            outlier_threshold=cfg.velocity_outlier_px,
 
+        )
+        self.perspective = perpsective_engine_correction(
+            depth_exponent=cfg.depth_exponent,
+            epsilon=cfg.math_epsilon,
+        )
+        self._lookback_frames = cfg.min_lookback_frames
+        self._locked = shotclass()
+        self._live = shotclass()
+
+    def run(self, video_Source: str, mode:str = AnalysisMode.INITIAL_LAUNCH.)
